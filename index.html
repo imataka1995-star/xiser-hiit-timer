@@ -110,8 +110,8 @@
 
         // Presets
         const PRESETS = {
-            standard: { name: "標準 (タバタ式)", work: 20, rest: 10, sets: 8, warmup: 60, cooldown: 60 },
             beginner: { name: "初心者 (無理なく)", work: 10, rest: 20, sets: 6, warmup: 60, cooldown: 60 },
+            standard: { name: "標準 (タバタ式)", work: 20, rest: 10, sets: 8, warmup: 60, cooldown: 60 },
             hard: { name: "上級 (追い込み)", work: 30, rest: 10, sets: 8, warmup: 60, cooldown: 60 },
         };
 
@@ -123,6 +123,9 @@
 
         const App = () => {
             const [config, setConfig] = useState(PRESETS.standard);
+            const [customConfig, setCustomConfig] = useState({ name: "カスタム", work: 30, rest: 30, sets: 5, warmup: 60, cooldown: 60 });
+            const [isCustomMode, setIsCustomMode] = useState(false);
+
             const [soundProfile, setSoundProfile] = useState('digital');
             const [volume, setVolume] = useState(0.5);
             
@@ -139,7 +142,7 @@
             const playSound = useCallback((type) => {
                 if (audioCtx.state === 'suspended') audioCtx.resume();
                 
-                const v = volume; // Use current volume state
+                const v = volume; 
 
                 if (soundProfile === 'digital') {
                     switch (type) {
@@ -153,9 +156,9 @@
                     }
                 } else if (soundProfile === 'gong') {
                     switch (type) {
-                        case 'count': SoundEngine.playTone(800, 'sine', 0.05, v * 0.5, audioCtx); break; // Woodblock-ish
-                        case 'start': SoundEngine.playGong(200, 2.5, v * 1.0, audioCtx); break; // Deep Gong
-                        case 'rest': SoundEngine.playGong(800, 1.5, v * 0.6, audioCtx); break; // High Bell/Chime
+                        case 'count': SoundEngine.playTone(800, 'sine', 0.05, v * 0.5, audioCtx); break;
+                        case 'start': SoundEngine.playGong(200, 2.5, v * 1.0, audioCtx); break;
+                        case 'rest': SoundEngine.playGong(800, 1.5, v * 0.6, audioCtx); break;
                         case 'finish': 
                             SoundEngine.playGong(150, 4.0, v * 1.0, audioCtx); 
                             setTimeout(() => SoundEngine.playGong(200, 4.0, v * 1.0, audioCtx), 200);
@@ -164,9 +167,9 @@
                 } else if (soundProfile === 'game') {
                     switch (type) {
                         case 'count': SoundEngine.playTone(440, 'square', 0.05, v * 0.4, audioCtx); break;
-                        case 'start': SoundEngine.playArpeggio([440, 554, 659, 880], 0.05, v * 0.7, audioCtx); break; // Power up
-                        case 'rest': SoundEngine.playArpeggio([880, 659, 554, 440], 0.08, v * 0.7, audioCtx); break; // Power down
-                        case 'finish': SoundEngine.playArpeggio([523, 659, 784, 1046, 784, 1046, 1318], 0.08, v * 0.7, audioCtx); break; // Fanfare
+                        case 'start': SoundEngine.playArpeggio([440, 554, 659, 880], 0.05, v * 0.7, audioCtx); break;
+                        case 'rest': SoundEngine.playArpeggio([880, 659, 554, 440], 0.08, v * 0.7, audioCtx); break;
+                        case 'finish': SoundEngine.playArpeggio([523, 659, 784, 1046, 784, 1046, 1318], 0.08, v * 0.7, audioCtx); break;
                     }
                 }
             }, [soundProfile, volume]);
@@ -247,9 +250,24 @@
             };
             
             const selectPreset = (key) => {
-                setConfig(PRESETS[key]);
+                if (key === 'custom') {
+                    setIsCustomMode(true);
+                    setConfig(customConfig);
+                } else {
+                    setIsCustomMode(false);
+                    setConfig(PRESETS[key]);
+                }
                 resetTimer();
-                setTimeLeft(PRESETS[key].warmup);
+                // Set time left to warmup
+                setTimeLeft(key === 'custom' ? customConfig.warmup : PRESETS[key].warmup);
+            };
+
+            const updateCustomConfig = (field, value) => {
+                const newValue = parseInt(value, 10);
+                const newConfig = { ...customConfig, [field]: newValue };
+                setCustomConfig(newConfig);
+                setConfig(newConfig); // Apply immediately
+                resetTimer(); // Reset timer on change
             };
 
             // UI Helpers
@@ -302,9 +320,9 @@
                     {/* Settings Modal */}
                     {showSettings && (
                         <div className="absolute inset-0 bg-black/95 z-50 flex flex-col items-center justify-center p-6 overflow-y-auto">
-                            <h2 className="text-2xl font-bold mb-8 text-white">設定</h2>
+                            <h2 className="text-2xl font-bold mb-6 text-white mt-10">設定</h2>
                             
-                            <div className="w-full max-w-sm space-y-8">
+                            <div className="w-full max-w-sm space-y-6 pb-10">
                                 {/* Sound Volume */}
                                 <div className="bg-gray-800 p-4 rounded-xl">
                                     <label className="block text-sm font-bold mb-3 text-gray-300 flex justify-between">
@@ -321,7 +339,6 @@
                                             value={volume} 
                                             onChange={(e) => {
                                                 setVolume(parseFloat(e.target.value));
-                                                // Test sound on change
                                                 if(audioCtx.state === 'suspended') audioCtx.resume();
                                                 SoundEngine.playTone(440, 'sine', 0.1, parseFloat(e.target.value), audioCtx);
                                             }}
@@ -331,7 +348,7 @@
                                 </div>
 
                                 {/* Sound Profile */}
-                                <div className="space-y-3">
+                                <div className="space-y-2">
                                     <label className="block text-sm font-bold text-gray-400 uppercase tracking-wider">サウンド種類</label>
                                     <div className="grid grid-cols-3 gap-2">
                                         {Object.keys(SOUND_PROFILES).map((key) => (
@@ -339,7 +356,6 @@
                                                 key={key}
                                                 onClick={() => {
                                                     setSoundProfile(key);
-                                                    // Preview sound
                                                     setTimeout(() => {
                                                         if(audioCtx.state === 'suspended') audioCtx.resume();
                                                         if(key === 'gong') SoundEngine.playGong(400, 1, volume, audioCtx);
@@ -359,30 +375,73 @@
                                 {/* Course Selection */}
                                 <div className="space-y-3">
                                     <label className="block text-sm font-bold text-gray-400 uppercase tracking-wider">コース選択</label>
+                                    
+                                    {/* Standard Presets */}
                                     {Object.keys(PRESETS).map((key) => (
                                         <button
                                             key={key}
-                                            onClick={() => {
-                                                selectPreset(key);
-                                                setShowSettings(false);
-                                            }}
-                                            className={`w-full p-4 rounded-xl text-left transition flex justify-between items-center ${config.name === PRESETS[key].name ? 'bg-white text-black' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
+                                            onClick={() => selectPreset(key)}
+                                            className={`w-full p-4 rounded-xl text-left transition flex justify-between items-center ${!isCustomMode && config.name === PRESETS[key].name ? 'bg-white text-black' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
                                         >
                                             <div>
                                                 <div className="font-bold">{PRESETS[key].name}</div>
                                                 <div className="text-xs opacity-70 mt-1">
-                                                    全力{PRESETS[key].work}秒 / 休み{PRESETS[key].rest}秒
+                                                    全力{PRESETS[key].work}秒 / 休み{PRESETS[key].rest}秒 / {PRESETS[key].sets}セット
                                                 </div>
                                             </div>
-                                            {config.name === PRESETS[key].name && <span className="bg-black text-white text-xs px-2 py-1 rounded-full">選択中</span>}
+                                            {!isCustomMode && config.name === PRESETS[key].name && <span className="bg-black text-white text-xs px-2 py-1 rounded-full">選択中</span>}
                                         </button>
                                     ))}
+
+                                    {/* Custom Button */}
+                                    <button
+                                        onClick={() => selectPreset('custom')}
+                                        className={`w-full p-4 rounded-xl text-left transition flex justify-between items-center ${isCustomMode ? 'bg-white text-black' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
+                                    >
+                                        <div>
+                                            <div className="font-bold flex items-center gap-2">
+                                                カスタム設定
+                                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>
+                                            </div>
+                                            <div className="text-xs opacity-70 mt-1">
+                                                時間・セット数を自由に編集
+                                            </div>
+                                        </div>
+                                        {isCustomMode && <span className="bg-black text-white text-xs px-2 py-1 rounded-full">編集中</span>}
+                                    </button>
+
+                                    {/* Custom Sliders (Only visible when Custom is selected) */}
+                                    {isCustomMode && (
+                                        <div className="bg-gray-800 p-4 rounded-xl border border-gray-600 space-y-4 animate-fade-in">
+                                            <div>
+                                                <label className="flex justify-between text-xs font-bold mb-2 text-red-400">
+                                                    <span>全力 (秒)</span>
+                                                    <span>{customConfig.work}秒</span>
+                                                </label>
+                                                <input type="range" min="5" max="60" step="5" value={customConfig.work} onChange={(e) => updateCustomConfig('work', e.target.value)} />
+                                            </div>
+                                            <div>
+                                                <label className="flex justify-between text-xs font-bold mb-2 text-blue-400">
+                                                    <span>休憩 (秒)</span>
+                                                    <span>{customConfig.rest}秒</span>
+                                                </label>
+                                                <input type="range" min="5" max="60" step="5" value={customConfig.rest} onChange={(e) => updateCustomConfig('rest', e.target.value)} />
+                                            </div>
+                                            <div>
+                                                <label className="flex justify-between text-xs font-bold mb-2 text-white">
+                                                    <span>セット数</span>
+                                                    <span>{customConfig.sets}回</span>
+                                                </label>
+                                                <input type="range" min="1" max="20" step="1" value={customConfig.sets} onChange={(e) => updateCustomConfig('sets', e.target.value)} />
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
 
                             <button 
                                 onClick={() => setShowSettings(false)}
-                                className="mt-8 text-gray-400 hover:text-white text-lg px-8 py-3 rounded-full border border-gray-700 hover:border-gray-500 transition"
+                                className="mt-4 mb-8 text-gray-400 hover:text-white text-lg px-8 py-3 rounded-full border border-gray-700 hover:border-gray-500 transition"
                             >
                                 閉じる
                             </button>
