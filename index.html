@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Xiser HIIT Timer</title>
     
-    <!-- タブのアイコン設定 (生成された炎の画像を使用) -->
-    <link rel="icon" href="http://googleusercontent.com/image_generation_content/2">
+    <!-- タブのアイコン設定 (同じフォルダのfire.pngを読み込む) -->
+    <link rel="icon" href="./fire.png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -61,8 +61,8 @@
     <script type="text/babel">
         const { useState, useEffect, useRef, useCallback } = React;
 
-        // Generated Background Image URL (Icon-like Vector Art Style)
-        const BACKGROUND_IMAGE_URL = "http://googleusercontent.com/image_generation_content/2";
+        // Background Image: Load "fire.png" from the same directory
+        const BACKGROUND_IMAGE_URL = "./fire.png";
 
         // Audio Context Singleton
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
