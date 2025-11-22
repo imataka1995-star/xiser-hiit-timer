@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Xiser HIIT Timer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; touch-action: manipulation; overscroll-behavior: none; }
+        .pulse-anim { animation: pulse-scale 1s infinite; }
+        @keyframes pulse-scale {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+        #root { height: 100dvh; display: flex; flex-direction: column; }
+        
+        /* Range Slider Customization */
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 24px;
+            width: 24px;
+            border-radius: 50%;
+            background: #ffffff;
+            cursor: pointer;
+            margin-top: -10px;
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: rgba(255,255,255,0.3);
+            border-radius: 2px;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white h-screen overflow-hidden">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+
+        // Audio Context Singleton
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        // Sound Generator Logic
+        const SoundEngine = {
+            playTone: (freq, type, duration, vol, ctx) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, ctx.currentTime);
+                
+                gain.gain.setValueAtTime(vol, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+                
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + duration);
+            },
+
+            // Simulates a metallic Gong sound
+            playGong: (baseFreq, duration, vol, ctx) => {
+                const ratios = [1, 1.4, 2.1, 2.9]; // Frequencies for metallic overtone
+                const gainNode = ctx.createGain();
+                gainNode.gain.setValueAtTime(vol, ctx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+                gainNode.connect(ctx.destination);
+
+                ratios.forEach((ratio, i) => {
+                    const osc = ctx.createOscillator();
+                    osc.type = i === 0 ? 'sine' : 'triangle';
+                    osc.frequency.setValueAtTime(baseFreq * ratio, ctx.currentTime);
+                    // Slightly detune for realism
+                    if (i > 0) osc.detune.value = Math.random() * 50 - 25;
+                    osc.connect(gainNode);
+                    osc.start();
+                    osc.stop(ctx.currentTime + duration);
+                });
+            },
+
+            // 8-bit Game Sound
+            playArpeggio: (freqs, speed, vol, ctx) => {
+                const now = ctx.currentTime;
+                freqs.forEach((f, i) => {
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.type = 'square';
+                    osc.frequency.value = f;
+                    gain.gain.setValueAtTime(vol * 0.5, now + i * speed);
+                    gain.gain.linearRampToValueAtTime(0, now + i * speed + 0.1);
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+                    osc.start(now + i * speed);
+                    osc.stop(now + i * speed + 0.15);
+                });
+            }
+        };
+
+        // Presets
+        const PRESETS = {
+            standard: { name: "標準 (タバタ式)", work: 20, rest: 10, sets: 8, warmup: 60, cooldown: 60 },
+            beginner: { name: "初心者 (無理なく)", work: 10, rest: 20, sets: 6, warmup: 60, cooldown: 60 },
+            hard: { name: "上級 (追い込み)", work: 30, rest: 10, sets: 8, warmup: 60, cooldown: 60 },
+        };
+
+        const SOUND_PROFILES = {
+            digital: { name: "デジタル", desc: "鋭い電子音" },
+            gong: { name: "ゴング", desc: "ボクシングジム風" },
+            game: { name: "ゲーム", desc: "8bitレトロ" }
+        };
+
+        const App = () => {
+            const [config, setConfig] = useState(PRESETS.standard);
+            const [soundProfile, setSoundProfile] = useState('digital');
+            const [volume, setVolume] = useState(0.5);
+            
+            const [isActive, setIsActive] = useState(false);
+            const [isPaused, setIsPaused] = useState(false);
+            const [phase, setPhase] = useState('idle');
+            const [timeLeft, setTimeLeft] = useState(config.warmup);
+            const [currentSet, setCurrentSet] = useState(1);
+            const [showSettings, setShowSettings] = useState(false);
+
+            const timerRef = useRef(null);
+
+            // --- Sound Trigger Functions ---
+            const playSound = useCallback((type) => {
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                
+                const v = volume; // Use current volume state
+
+                if (soundProfile === 'digital') {
+                    switch (type) {
+                        case 'count': SoundEngine.playTone(880, 'triangle', 0.1, v * 0.5, audioCtx); break;
+                        case 'start': SoundEngine.playTone(1200, 'square', 0.8, v * 0.8, audioCtx); break;
+                        case 'rest': SoundEngine.playTone(300, 'sawtooth', 0.6, v * 0.8, audioCtx); break;
+                        case 'finish': 
+                            SoundEngine.playTone(1000, 'square', 0.2, v * 0.6, audioCtx);
+                            setTimeout(() => SoundEngine.playTone(1500, 'square', 0.8, v * 0.6, audioCtx), 200);
+                            break;
+                    }
+                } else if (soundProfile === 'gong') {
+                    switch (type) {
+                        case 'count': SoundEngine.playTone(800, 'sine', 0.05, v * 0.5, audioCtx); break; // Woodblock-ish
+                        case 'start': SoundEngine.playGong(200, 2.5, v * 1.0, audioCtx); break; // Deep Gong
+                        case 'rest': SoundEngine.playGong(800, 1.5, v * 0.6, audioCtx); break; // High Bell/Chime
+                        case 'finish': 
+                            SoundEngine.playGong(150, 4.0, v * 1.0, audioCtx); 
+                            setTimeout(() => SoundEngine.playGong(200, 4.0, v * 1.0, audioCtx), 200);
+                            break;
+                    }
+                } else if (soundProfile === 'game') {
+                    switch (type) {
+                        case 'count': SoundEngine.playTone(440, 'square', 0.05, v * 0.4, audioCtx); break;
+                        case 'start': SoundEngine.playArpeggio([440, 554, 659, 880], 0.05, v * 0.7, audioCtx); break; // Power up
+                        case 'rest': SoundEngine.playArpeggio([880, 659, 554, 440], 0.08, v * 0.7, audioCtx); break; // Power down
+                        case 'finish': SoundEngine.playArpeggio([523, 659, 784, 1046, 784, 1046, 1318], 0.08, v * 0.7, audioCtx); break; // Fanfare
+                    }
+                }
+            }, [soundProfile, volume]);
+
+
+            // --- Timer Logic ---
+            const handleTick = useCallback(() => {
+                if (timeLeft > 0) {
+                    // Countdown (3, 2, 1)
+                    if (timeLeft <= 3 && timeLeft > 0) {
+                        playSound('count');
+                    }
+                    setTimeLeft(prev => prev - 1);
+                } else {
+                    // Phase Switch
+                    switch (phase) {
+                        case 'warmup':
+                            setPhase('work');
+                            setTimeLeft(config.work);
+                            playSound('start');
+                            break;
+                        case 'work':
+                            if (currentSet < config.sets) {
+                                setPhase('rest');
+                                setTimeLeft(config.rest);
+                                playSound('rest');
+                            } else {
+                                setPhase('cooldown');
+                                setTimeLeft(config.cooldown);
+                                playSound('rest');
+                            }
+                            break;
+                        case 'rest':
+                            setCurrentSet(prev => prev + 1);
+                            setPhase('work');
+                            setTimeLeft(config.work);
+                            playSound('start');
+                            break;
+                        case 'cooldown':
+                            setPhase('finished');
+                            setIsActive(false);
+                            playSound('finish');
+                            break;
+                        default:
+                            break;
+                    }
+                }
+            }, [timeLeft, phase, currentSet, config, playSound]);
+
+            useEffect(() => {
+                if (isActive && !isPaused) {
+                    timerRef.current = setInterval(handleTick, 1000);
+                } else {
+                    clearInterval(timerRef.current);
+                }
+                return () => clearInterval(timerRef.current);
+            }, [isActive, isPaused, handleTick]);
+
+            // --- Controls ---
+            const startTimer = () => {
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                setIsActive(true);
+                setIsPaused(false);
+                if (phase === 'idle' || phase === 'finished') {
+                    setPhase('warmup');
+                    setTimeLeft(config.warmup);
+                    setCurrentSet(1);
+                }
+            };
+
+            const pauseTimer = () => setIsPaused(!isPaused);
+            const resetTimer = () => {
+                setIsActive(false);
+                setIsPaused(false);
+                setPhase('idle');
+                setCurrentSet(1);
+                setTimeLeft(config.warmup);
+            };
+            
+            const selectPreset = (key) => {
+                setConfig(PRESETS[key]);
+                resetTimer();
+                setTimeLeft(PRESETS[key].warmup);
+            };
+
+            // UI Helpers
+            const getPhaseColor = () => {
+                switch (phase) {
+                    case 'warmup': return 'bg-yellow-600';
+                    case 'work': return 'bg-red-600';
+                    case 'rest': return 'bg-blue-600';
+                    case 'cooldown': return 'bg-green-600';
+                    case 'finished': return 'bg-purple-600';
+                    default: return 'bg-gray-800';
+                }
+            };
+
+            const getPhaseLabel = () => {
+                switch (phase) {
+                    case 'warmup': return 'ウォーミングアップ';
+                    case 'work': return '全力 (Go!)';
+                    case 'rest': return '休憩 (Rest)';
+                    case 'cooldown': return 'クールダウン';
+                    case 'finished': return '完了！';
+                    default: return '準備完了';
+                }
+            };
+
+            const getInstruction = () => {
+                switch (phase) {
+                    case 'warmup': return 'ゆっくりペースで体を温めましょう';
+                    case 'work': return '姿勢を低く、全速力で！';
+                    case 'rest': return '止まらずゆっくり足踏みを継続';
+                    case 'cooldown': return '絶対に急に止まらず、徐々にペースダウン';
+                    case 'finished': return 'お疲れ様でした！水分補給を。';
+                    default: return 'スタートボタンを押して開始';
+                }
+            };
+
+            return (
+                <div className={`flex-1 flex flex-col items-center justify-center w-full transition-colors duration-500 ${getPhaseColor()} relative`}>
+                    
+                    {/* Header Button */}
+                    <div className="absolute top-4 right-4 z-20">
+                        <button 
+                            onClick={() => setShowSettings(true)}
+                            className="bg-white/20 hover:bg-white/30 p-3 rounded-full text-white backdrop-blur-sm shadow-sm"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+                        </button>
+                    </div>
+
+                    {/* Settings Modal */}
+                    {showSettings && (
+                        <div className="absolute inset-0 bg-black/95 z-50 flex flex-col items-center justify-center p-6 overflow-y-auto">
+                            <h2 className="text-2xl font-bold mb-8 text-white">設定</h2>
+                            
+                            <div className="w-full max-w-sm space-y-8">
+                                {/* Sound Volume */}
+                                <div className="bg-gray-800 p-4 rounded-xl">
+                                    <label className="block text-sm font-bold mb-3 text-gray-300 flex justify-between">
+                                        <span>音量</span>
+                                        <span>{Math.round(volume * 100)}%</span>
+                                    </label>
+                                    <div className="flex items-center gap-3">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon></svg>
+                                        <input 
+                                            type="range" 
+                                            min="0" 
+                                            max="1" 
+                                            step="0.1" 
+                                            value={volume} 
+                                            onChange={(e) => {
+                                                setVolume(parseFloat(e.target.value));
+                                                // Test sound on change
+                                                if(audioCtx.state === 'suspended') audioCtx.resume();
+                                                SoundEngine.playTone(440, 'sine', 0.1, parseFloat(e.target.value), audioCtx);
+                                            }}
+                                        />
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                                    </div>
+                                </div>
+
+                                {/* Sound Profile */}
+                                <div className="space-y-3">
+                                    <label className="block text-sm font-bold text-gray-400 uppercase tracking-wider">サウンド種類</label>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {Object.keys(SOUND_PROFILES).map((key) => (
+                                            <button
+                                                key={key}
+                                                onClick={() => {
+                                                    setSoundProfile(key);
+                                                    // Preview sound
+                                                    setTimeout(() => {
+                                                        if(audioCtx.state === 'suspended') audioCtx.resume();
+                                                        if(key === 'gong') SoundEngine.playGong(400, 1, volume, audioCtx);
+                                                        else if(key === 'game') SoundEngine.playArpeggio([440, 880], 0.1, volume, audioCtx);
+                                                        else SoundEngine.playTone(880, 'square', 0.2, volume, audioCtx);
+                                                    }, 100);
+                                                }}
+                                                className={`p-3 rounded-lg text-sm font-bold transition ${soundProfile === key ? 'bg-blue-600 text-white ring-2 ring-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
+                                            >
+                                                {SOUND_PROFILES[key].name}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <p className="text-xs text-gray-500 text-center">{SOUND_PROFILES[soundProfile].desc}</p>
+                                </div>
+
+                                {/* Course Selection */}
+                                <div className="space-y-3">
+                                    <label className="block text-sm font-bold text-gray-400 uppercase tracking-wider">コース選択</label>
+                                    {Object.keys(PRESETS).map((key) => (
+                                        <button
+                                            key={key}
+                                            onClick={() => {
+                                                selectPreset(key);
+                                                setShowSettings(false);
+                                            }}
+                                            className={`w-full p-4 rounded-xl text-left transition flex justify-between items-center ${config.name === PRESETS[key].name ? 'bg-white text-black' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
+                                        >
+                                            <div>
+                                                <div className="font-bold">{PRESETS[key].name}</div>
+                                                <div className="text-xs opacity-70 mt-1">
+                                                    全力{PRESETS[key].work}秒 / 休み{PRESETS[key].rest}秒
+                                                </div>
+                                            </div>
+                                            {config.name === PRESETS[key].name && <span className="bg-black text-white text-xs px-2 py-1 rounded-full">選択中</span>}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <button 
+                                onClick={() => setShowSettings(false)}
+                                className="mt-8 text-gray-400 hover:text-white text-lg px-8 py-3 rounded-full border border-gray-700 hover:border-gray-500 transition"
+                            >
+                                閉じる
+                            </button>
+                        </div>
+                    )}
+
+                    {/* Main Display */}
+                    <div className="flex flex-col items-center justify-center w-full px-4 h-full">
+                        <div className="text-xl md:text-3xl font-bold mb-2 tracking-wider uppercase opacity-90 drop-shadow-md">
+                            {getPhaseLabel()}
+                        </div>
+
+                        {/* Timer */}
+                        <div className={`text-[25vw] md:text-[12rem] font-black leading-none tabular-nums my-4 drop-shadow-lg select-none ${phase === 'work' ? 'pulse-anim' : ''}`}>
+                            {timeLeft}
+                        </div>
+
+                        {/* Set Counter */}
+                        <div className="h-12 mb-6 flex items-center justify-center">
+                            {(phase === 'work' || phase === 'rest') && (
+                                <div className="text-3xl md:text-5xl font-bold opacity-90 tracking-widest">
+                                    SET {currentSet} <span className="text-xl opacity-70">/ {config.sets}</span>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Instructions */}
+                        <div className="h-16 mb-8 flex items-center justify-center w-full max-w-2xl">
+                            <div className="text-lg md:text-2xl bg-black/30 backdrop-blur-md py-3 px-8 rounded-2xl inline-block w-full text-center">
+                                {getInstruction()}
+                            </div>
+                        </div>
+
+                        {/* Controls */}
+                        <div className="flex gap-6 justify-center mt-4">
+                            {!isActive ? (
+                                <button 
+                                    onClick={startTimer}
+                                    className="bg-white text-gray-900 hover:bg-gray-200 px-12 py-6 rounded-full font-black text-3xl shadow-xl transition-transform active:scale-95 flex items-center gap-3"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                                    START
+                                </button>
+                            ) : (
+                                <>
+                                    <button 
+                                        onClick={pauseTimer}
+                                        className="bg-white/20 hover:bg-white/30 text-white border-2 border-white/50 px-8 py-4 rounded-full font-bold text-xl transition-colors backdrop-blur-sm"
+                                    >
+                                        {isPaused ? "再開" : "一時停止"}
+                                    </button>
+                                    <button 
+                                        onClick={resetTimer}
+                                        className="bg-red-500/40 hover:bg-red-500/60 text-white border-2 border-red-500/50 px-8 py-4 rounded-full font-bold text-xl transition-colors backdrop-blur-sm"
+                                    >
+                                        終了
+                                    </button>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
