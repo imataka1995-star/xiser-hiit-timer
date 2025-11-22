@@ -18,7 +18,14 @@
             50% { transform: scale(1.05); }
             100% { transform: scale(1); }
         }
-        #root { height: 100dvh; display: flex; flex-direction: column; }
+        /* 横画面対応：100dvhを基本としつつ、溢れたらスクロール許可 */
+        #root { 
+            min-height: 100dvh; 
+            display: flex; 
+            flex-direction: column;
+            overflow-y: auto; /* スクロール許可 */
+            -webkit-overflow-scrolling: touch;
+        }
         
         /* Range Slider Customization */
         input[type=range] {
@@ -44,7 +51,7 @@
         }
     </style>
 </head>
-<body class="bg-gray-900 text-white h-screen overflow-hidden">
+<body class="bg-gray-900 text-white">
     <div id="root"></div>
 
     <script type="text/babel">
@@ -82,7 +89,6 @@
                     const osc = ctx.createOscillator();
                     osc.type = i === 0 ? 'sine' : 'triangle';
                     osc.frequency.setValueAtTime(baseFreq * ratio, ctx.currentTime);
-                    // Slightly detune for realism
                     if (i > 0) osc.detune.value = Math.random() * 50 - 25;
                     osc.connect(gainNode);
                     osc.start();
@@ -137,6 +143,51 @@
             const [showSettings, setShowSettings] = useState(false);
 
             const timerRef = useRef(null);
+            // Wake Lock Reference
+            const wakeLockRef = useRef(null);
+
+            // --- Wake Lock API Logic ---
+            const requestWakeLock = async () => {
+                try {
+                    if ('wakeLock' in navigator) {
+                        wakeLockRef.current = await navigator.wakeLock.request('screen');
+                        console.log('Wake Lock active');
+                    }
+                } catch (err) {
+                    console.error(`${err.name}, ${err.message}`);
+                }
+            };
+
+            const releaseWakeLock = async () => {
+                if (wakeLockRef.current) {
+                    await wakeLockRef.current.release();
+                    wakeLockRef.current = null;
+                    console.log('Wake Lock released');
+                }
+            };
+
+            // Handle Wake Lock based on active state
+            useEffect(() => {
+                if (isActive && !isPaused) {
+                    requestWakeLock();
+                } else {
+                    releaseWakeLock();
+                }
+                // Cleanup on unmount
+                return () => releaseWakeLock();
+            }, [isActive, isPaused]);
+
+            // Re-acquire wake lock if visibility changes (e.g. switching tabs)
+            useEffect(() => {
+                const handleVisibilityChange = () => {
+                    if (document.visibilityState === 'visible' && isActive && !isPaused) {
+                        requestWakeLock();
+                    }
+                };
+                document.addEventListener('visibilitychange', handleVisibilityChange);
+                return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+            }, [isActive, isPaused]);
+
 
             // --- Sound Trigger Functions ---
             const playSound = useCallback((type) => {
@@ -258,7 +309,6 @@
                     setConfig(PRESETS[key]);
                 }
                 resetTimer();
-                // Set time left to warmup
                 setTimeLeft(key === 'custom' ? customConfig.warmup : PRESETS[key].warmup);
             };
 
@@ -267,7 +317,7 @@
                 const newConfig = { ...customConfig, [field]: newValue };
                 setCustomConfig(newConfig);
                 setConfig(newConfig); // Apply immediately
-                resetTimer(); // Reset timer on change
+                resetTimer(); 
             };
 
             // UI Helpers
@@ -305,7 +355,7 @@
             };
 
             return (
-                <div className={`flex-1 flex flex-col items-center justify-center w-full transition-colors duration-500 ${getPhaseColor()} relative`}>
+                <div className={`flex-1 flex flex-col items-center justify-center w-full transition-colors duration-500 ${getPhaseColor()} relative min-h-[100dvh]`}>
                     
                     {/* Header Button */}
                     <div className="absolute top-4 right-4 z-20">
@@ -317,150 +367,152 @@
                         </button>
                     </div>
 
-                    {/* Settings Modal */}
+                    {/* Settings Modal (Fixed: Scrollable and Safe Area) */}
                     {showSettings && (
-                        <div className="absolute inset-0 bg-black/95 z-50 flex flex-col items-center justify-center p-6 overflow-y-auto">
-                            <h2 className="text-2xl font-bold mb-6 text-white mt-10">設定</h2>
-                            
-                            <div className="w-full max-w-sm space-y-6 pb-10">
-                                {/* Sound Volume */}
-                                <div className="bg-gray-800 p-4 rounded-xl">
-                                    <label className="block text-sm font-bold mb-3 text-gray-300 flex justify-between">
-                                        <span>音量</span>
-                                        <span>{Math.round(volume * 100)}%</span>
-                                    </label>
-                                    <div className="flex items-center gap-3">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon></svg>
-                                        <input 
-                                            type="range" 
-                                            min="0" 
-                                            max="1" 
-                                            step="0.1" 
-                                            value={volume} 
-                                            onChange={(e) => {
-                                                setVolume(parseFloat(e.target.value));
-                                                if(audioCtx.state === 'suspended') audioCtx.resume();
-                                                SoundEngine.playTone(440, 'sine', 0.1, parseFloat(e.target.value), audioCtx);
-                                            }}
-                                        />
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                        <div className="absolute inset-0 bg-black/95 z-50 overflow-y-auto">
+                            <div className="min-h-full flex flex-col items-center justify-center p-6">
+                                <h2 className="text-2xl font-bold mb-6 text-white mt-4">設定</h2>
+                                
+                                <div className="w-full max-w-sm space-y-6">
+                                    {/* Sound Volume */}
+                                    <div className="bg-gray-800 p-4 rounded-xl">
+                                        <label className="block text-sm font-bold mb-3 text-gray-300 flex justify-between">
+                                            <span>音量</span>
+                                            <span>{Math.round(volume * 100)}%</span>
+                                        </label>
+                                        <div className="flex items-center gap-3">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon></svg>
+                                            <input 
+                                                type="range" 
+                                                min="0" 
+                                                max="1" 
+                                                step="0.1" 
+                                                value={volume} 
+                                                onChange={(e) => {
+                                                    setVolume(parseFloat(e.target.value));
+                                                    if(audioCtx.state === 'suspended') audioCtx.resume();
+                                                    SoundEngine.playTone(440, 'sine', 0.1, parseFloat(e.target.value), audioCtx);
+                                                }}
+                                            />
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                                        </div>
                                     </div>
-                                </div>
 
-                                {/* Sound Profile */}
-                                <div className="space-y-2">
-                                    <label className="block text-sm font-bold text-gray-400 uppercase tracking-wider">サウンド種類</label>
-                                    <div className="grid grid-cols-3 gap-2">
-                                        {Object.keys(SOUND_PROFILES).map((key) => (
+                                    {/* Sound Profile */}
+                                    <div className="space-y-2">
+                                        <label className="block text-sm font-bold text-gray-400 uppercase tracking-wider">サウンド種類</label>
+                                        <div className="grid grid-cols-3 gap-2">
+                                            {Object.keys(SOUND_PROFILES).map((key) => (
+                                                <button
+                                                    key={key}
+                                                    onClick={() => {
+                                                        setSoundProfile(key);
+                                                        setTimeout(() => {
+                                                            if(audioCtx.state === 'suspended') audioCtx.resume();
+                                                            if(key === 'gong') SoundEngine.playGong(400, 1, volume, audioCtx);
+                                                            else if(key === 'game') SoundEngine.playArpeggio([440, 880], 0.1, volume, audioCtx);
+                                                            else SoundEngine.playTone(880, 'square', 0.2, volume, audioCtx);
+                                                        }, 100);
+                                                    }}
+                                                    className={`p-3 rounded-lg text-sm font-bold transition ${soundProfile === key ? 'bg-blue-600 text-white ring-2 ring-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
+                                                >
+                                                    {SOUND_PROFILES[key].name}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        <p className="text-xs text-gray-500 text-center">{SOUND_PROFILES[soundProfile].desc}</p>
+                                    </div>
+
+                                    {/* Course Selection */}
+                                    <div className="space-y-3">
+                                        <label className="block text-sm font-bold text-gray-400 uppercase tracking-wider">コース選択</label>
+                                        
+                                        {/* Standard Presets */}
+                                        {Object.keys(PRESETS).map((key) => (
                                             <button
                                                 key={key}
-                                                onClick={() => {
-                                                    setSoundProfile(key);
-                                                    setTimeout(() => {
-                                                        if(audioCtx.state === 'suspended') audioCtx.resume();
-                                                        if(key === 'gong') SoundEngine.playGong(400, 1, volume, audioCtx);
-                                                        else if(key === 'game') SoundEngine.playArpeggio([440, 880], 0.1, volume, audioCtx);
-                                                        else SoundEngine.playTone(880, 'square', 0.2, volume, audioCtx);
-                                                    }, 100);
-                                                }}
-                                                className={`p-3 rounded-lg text-sm font-bold transition ${soundProfile === key ? 'bg-blue-600 text-white ring-2 ring-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
+                                                onClick={() => selectPreset(key)}
+                                                className={`w-full p-4 rounded-xl text-left transition flex justify-between items-center ${!isCustomMode && config.name === PRESETS[key].name ? 'bg-white text-black' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
                                             >
-                                                {SOUND_PROFILES[key].name}
+                                                <div>
+                                                    <div className="font-bold">{PRESETS[key].name}</div>
+                                                    <div className="text-xs opacity-70 mt-1">
+                                                        全力{PRESETS[key].work}秒 / 休み{PRESETS[key].rest}秒 / {PRESETS[key].sets}セット
+                                                    </div>
+                                                </div>
+                                                {!isCustomMode && config.name === PRESETS[key].name && <span className="bg-black text-white text-xs px-2 py-1 rounded-full">選択中</span>}
                                             </button>
                                         ))}
-                                    </div>
-                                    <p className="text-xs text-gray-500 text-center">{SOUND_PROFILES[soundProfile].desc}</p>
-                                </div>
 
-                                {/* Course Selection */}
-                                <div className="space-y-3">
-                                    <label className="block text-sm font-bold text-gray-400 uppercase tracking-wider">コース選択</label>
-                                    
-                                    {/* Standard Presets */}
-                                    {Object.keys(PRESETS).map((key) => (
+                                        {/* Custom Button */}
                                         <button
-                                            key={key}
-                                            onClick={() => selectPreset(key)}
-                                            className={`w-full p-4 rounded-xl text-left transition flex justify-between items-center ${!isCustomMode && config.name === PRESETS[key].name ? 'bg-white text-black' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
+                                            onClick={() => selectPreset('custom')}
+                                            className={`w-full p-4 rounded-xl text-left transition flex justify-between items-center ${isCustomMode ? 'bg-white text-black' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
                                         >
                                             <div>
-                                                <div className="font-bold">{PRESETS[key].name}</div>
+                                                <div className="font-bold flex items-center gap-2">
+                                                    カスタム設定
+                                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>
+                                                </div>
                                                 <div className="text-xs opacity-70 mt-1">
-                                                    全力{PRESETS[key].work}秒 / 休み{PRESETS[key].rest}秒 / {PRESETS[key].sets}セット
+                                                    時間・セット数を自由に編集
                                                 </div>
                                             </div>
-                                            {!isCustomMode && config.name === PRESETS[key].name && <span className="bg-black text-white text-xs px-2 py-1 rounded-full">選択中</span>}
+                                            {isCustomMode && <span className="bg-black text-white text-xs px-2 py-1 rounded-full">編集中</span>}
                                         </button>
-                                    ))}
 
-                                    {/* Custom Button */}
-                                    <button
-                                        onClick={() => selectPreset('custom')}
-                                        className={`w-full p-4 rounded-xl text-left transition flex justify-between items-center ${isCustomMode ? 'bg-white text-black' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
-                                    >
-                                        <div>
-                                            <div className="font-bold flex items-center gap-2">
-                                                カスタム設定
-                                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>
+                                        {/* Custom Sliders (Only visible when Custom is selected) */}
+                                        {isCustomMode && (
+                                            <div className="bg-gray-800 p-4 rounded-xl border border-gray-600 space-y-4 animate-fade-in">
+                                                <div>
+                                                    <label className="flex justify-between text-xs font-bold mb-2 text-red-400">
+                                                        <span>全力 (秒)</span>
+                                                        <span>{customConfig.work}秒</span>
+                                                    </label>
+                                                    <input type="range" min="5" max="60" step="5" value={customConfig.work} onChange={(e) => updateCustomConfig('work', e.target.value)} />
+                                                </div>
+                                                <div>
+                                                    <label className="flex justify-between text-xs font-bold mb-2 text-blue-400">
+                                                        <span>休憩 (秒)</span>
+                                                        <span>{customConfig.rest}秒</span>
+                                                    </label>
+                                                    <input type="range" min="5" max="60" step="5" value={customConfig.rest} onChange={(e) => updateCustomConfig('rest', e.target.value)} />
+                                                </div>
+                                                <div>
+                                                    <label className="flex justify-between text-xs font-bold mb-2 text-white">
+                                                        <span>セット数</span>
+                                                        <span>{customConfig.sets}回</span>
+                                                    </label>
+                                                    <input type="range" min="1" max="20" step="1" value={customConfig.sets} onChange={(e) => updateCustomConfig('sets', e.target.value)} />
+                                                </div>
                                             </div>
-                                            <div className="text-xs opacity-70 mt-1">
-                                                時間・セット数を自由に編集
-                                            </div>
-                                        </div>
-                                        {isCustomMode && <span className="bg-black text-white text-xs px-2 py-1 rounded-full">編集中</span>}
-                                    </button>
-
-                                    {/* Custom Sliders (Only visible when Custom is selected) */}
-                                    {isCustomMode && (
-                                        <div className="bg-gray-800 p-4 rounded-xl border border-gray-600 space-y-4 animate-fade-in">
-                                            <div>
-                                                <label className="flex justify-between text-xs font-bold mb-2 text-red-400">
-                                                    <span>全力 (秒)</span>
-                                                    <span>{customConfig.work}秒</span>
-                                                </label>
-                                                <input type="range" min="5" max="60" step="5" value={customConfig.work} onChange={(e) => updateCustomConfig('work', e.target.value)} />
-                                            </div>
-                                            <div>
-                                                <label className="flex justify-between text-xs font-bold mb-2 text-blue-400">
-                                                    <span>休憩 (秒)</span>
-                                                    <span>{customConfig.rest}秒</span>
-                                                </label>
-                                                <input type="range" min="5" max="60" step="5" value={customConfig.rest} onChange={(e) => updateCustomConfig('rest', e.target.value)} />
-                                            </div>
-                                            <div>
-                                                <label className="flex justify-between text-xs font-bold mb-2 text-white">
-                                                    <span>セット数</span>
-                                                    <span>{customConfig.sets}回</span>
-                                                </label>
-                                                <input type="range" min="1" max="20" step="1" value={customConfig.sets} onChange={(e) => updateCustomConfig('sets', e.target.value)} />
-                                            </div>
-                                        </div>
-                                    )}
+                                        )}
+                                    </div>
                                 </div>
-                            </div>
 
-                            <button 
-                                onClick={() => setShowSettings(false)}
-                                className="mt-4 mb-8 text-gray-400 hover:text-white text-lg px-8 py-3 rounded-full border border-gray-700 hover:border-gray-500 transition"
-                            >
-                                閉じる
-                            </button>
+                                <button 
+                                    onClick={() => setShowSettings(false)}
+                                    className="mt-8 mb-4 text-gray-400 hover:text-white text-lg px-8 py-3 rounded-full border border-gray-700 hover:border-gray-500 transition"
+                                >
+                                    閉じる
+                                </button>
+                            </div>
                         </div>
                     )}
 
                     {/* Main Display */}
-                    <div className="flex flex-col items-center justify-center w-full px-4 h-full">
+                    <div className="flex flex-col items-center justify-center w-full px-4 py-4 flex-grow">
                         <div className="text-xl md:text-3xl font-bold mb-2 tracking-wider uppercase opacity-90 drop-shadow-md">
                             {getPhaseLabel()}
                         </div>
 
-                        {/* Timer */}
-                        <div className={`text-[25vw] md:text-[12rem] font-black leading-none tabular-nums my-4 drop-shadow-lg select-none ${phase === 'work' ? 'pulse-anim' : ''}`}>
+                        {/* Timer (Using vmin for responsive sizing in both portrait and landscape) */}
+                        <div className={`text-[25vmin] font-black leading-none tabular-nums my-2 drop-shadow-lg select-none ${phase === 'work' ? 'pulse-anim' : ''}`}>
                             {timeLeft}
                         </div>
 
                         {/* Set Counter */}
-                        <div className="h-12 mb-6 flex items-center justify-center">
+                        <div className="h-12 mb-4 flex items-center justify-center">
                             {(phase === 'work' || phase === 'rest') && (
                                 <div className="text-3xl md:text-5xl font-bold opacity-90 tracking-widest">
                                     SET {currentSet} <span className="text-xl opacity-70">/ {config.sets}</span>
@@ -469,14 +521,14 @@
                         </div>
 
                         {/* Instructions */}
-                        <div className="h-16 mb-8 flex items-center justify-center w-full max-w-2xl">
+                        <div className="min-h-[4rem] mb-6 flex items-center justify-center w-full max-w-2xl">
                             <div className="text-lg md:text-2xl bg-black/30 backdrop-blur-md py-3 px-8 rounded-2xl inline-block w-full text-center">
                                 {getInstruction()}
                             </div>
                         </div>
 
                         {/* Controls */}
-                        <div className="flex gap-6 justify-center mt-4">
+                        <div className="flex gap-6 justify-center pb-8">
                             {!isActive ? (
                                 <button 
                                     onClick={startTimer}
